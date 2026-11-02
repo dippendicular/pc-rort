@@ -16,7 +16,7 @@ weight kept local. This repository contains:
 
 ## Install
 
-Python 3.11 or newer.
+Python 3.11 or newer
 
 ```bash
 git clone https://github.com/dippendicular/pc-rort.git
