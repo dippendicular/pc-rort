@@ -41,10 +41,10 @@ lightning_logs/
 *.onnx
 *.safetensors
 
-# Local datasets and potentially sensitive patient data.
-# Patient data must remain local and out of version control.
+# Datasets stay local; the folder itself is kept with a placeholder.
+datasets/*
+!datasets/.gitkeep
 data/
-datasets/
 raw_data/
 processed_data/
 private_data/

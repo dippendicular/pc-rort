@@ -1,0 +1,44 @@
+# Default evaluation settings. Copy this file to change them:
+#   pcrort run --config configs/experiment.yaml --name my_run
+name: experiment
+datasets: auto          # every usable table under dataset_root, or a list of names/paths
+dataset_root: datasets
+output_dir: outputs
+repetitions: 100
+seed: 2026110301
+workers: 4
+
+split:
+  ratios: [0.6, 0.2, 0.2]   # train / pilot / test
+  min_train_class: 6
+  min_eval_class: 2
+
+clients:
+  count: 3
+  regimes: [iid, non_iid]
+  dirichlet_alpha: 0.5      # label skew of the non-IID partition
+  min_client_class: 2
+
+l2: 0.01                    # logistic penalty shared by every model
+
+fedavg:
+  rounds: 100               # pick with: pcrort fedavg-budget
+  local_epochs: 3
+  learning_rate: 0.1
+
+mixture:
+  external_mass_cap: 0.5    # recipient keeps at least half of its own model
+  radius_fraction: 0.03     # Frobenius uncertainty radius relative to ||Q||
+  adaptive_folds: 5
+  adaptive_penalty: 1.0
+  max_iterations: 30
+
+threshold:
+  fixed: 0.5
+  target_specificity: 0.9   # pilot-selected operating point
+  min_pilot_per_class: 5
+
+analysis:
+  primary_methods: [FULL, ADAPTIVE]
+  comparators: [LOCAL, FedAvg, POOLED]
+  alpha: 0.05

@@ -56,6 +56,9 @@ class OracleOutcome:
     matrix: np.ndarray
     solver_status: str
     # CVXPY primal values are approximate; this is NOT a verified upper bound.
+    set_residual: float = 0.
+    repair_distance: float = 0.
+    certificate_status: str = 'numerical-only'
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,52 @@ class SelectionOutcome:
     oracle_value: float
     gap: float
     uncertainty_kind: str
+    certificate_status: str = 'numerical-only'
+
+
+def _repair_oracle_matrix(matrix: np.ndarray, uncertainty: UncertaintySet) -> np.ndarray:
+    """Repair floating-point cuts without discarding the other set constraints.
+
+    This is numerical feasibility repair, not interval arithmetic certification.
+    Frobenius/box regions are convex and contain the center. For affine sets,
+    work in the original coefficient space and contract toward the center.
+    """
+    q0=uncertainty.center
+    q=(matrix+matrix.T)/2
+    if uncertainty.kind=='affine_psd':
+        d=uncertainty.directions.reshape(len(uncertainty.directions),-1).T
+        u=np.linalg.lstsq(d,(q-q0).ravel(),rcond=None)[0]
+        if np.linalg.norm(u)>uncertainty.radius:
+            u*=uncertainty.radius/max(np.linalg.norm(u),1e-300)
+        direction=(d@u).reshape(q.shape)
+        step=1.
+        for _ in range(60):
+            candidate=q0+step*direction
+            if np.linalg.eigvalsh(candidate).min()>=0:return candidate
+            step*=.5
+        return q0.copy()
+    w,v=np.linalg.eigh(q)
+    q=(v*np.maximum(w,0))@v.T
+    direction=q-q0
+    if uncertainty.kind=='frobenius':
+        step=min(1.,uncertainty.radius/max(np.linalg.norm(direction,'fro'),1e-300))
+    else:
+        active=np.abs(direction)>0
+        step=min(1.,float(np.min(uncertainty.widths[active]/np.abs(direction[active])))) if active.any() else 1.
+    if step<1:step*=1-1e-12
+    return q0+step*direction
+
+
+def _set_residual(q: np.ndarray, uncertainty: UncertaintySet) -> float:
+    psd=max(0.,-float(np.linalg.eigvalsh(q).min()))
+    delta=q-uncertainty.center
+    if uncertainty.kind=='frobenius':other=max(0.,np.linalg.norm(delta,'fro')-uncertainty.radius)
+    elif uncertainty.kind=='box_psd':other=max(0.,float(np.max(np.abs(delta)-uncertainty.widths)))
+    else:
+        d=uncertainty.directions.reshape(len(uncertainty.directions),-1).T
+        u=np.linalg.lstsq(d,delta.ravel(),rcond=None)[0]
+        other=max(np.linalg.norm(d@u-delta.ravel()),np.linalg.norm(u)-uncertainty.radius,0.)
+    return float(max(psd,other))
 
 
 def _solve(problem: cp.Problem, solver: str, **solver_options) -> str:
@@ -110,9 +159,17 @@ def separation_oracle(
     status = _solve(problem, solver, **solver_options)
     q_sol = np.asarray(q.value, dtype=float)
     # Validate numerical output and never call a solver optimum a verified bound.
-    if np.linalg.eigvalsh(q_sol).min() < -2e-5:
+    q_sol = (q_sol + q_sol.T) / 2
+    eigenvalues = np.linalg.eigvalsh(q_sol)
+    if eigenvalues.min() < -2e-5:
         raise RuntimeError("Oracle returned a significantly non-PSD matrix")
-    return OracleOutcome(float(np.sum(g * q_sol)), (q_sol + q_sol.T) / 2, status)
+    # PSD projection alone can leave the ball, box or affine set.
+    original=q_sol.copy()
+    q_sol=_repair_oracle_matrix(q_sol,uncertainty)
+    residual=_set_residual(q_sol,uncertainty)
+    if residual>2e-7:raise RuntimeError('oracle matrix fails uncertainty-set feasibility')
+    return OracleOutcome(float(np.sum(g*q_sol)),q_sol,status,residual,
+                         float(np.linalg.norm(q_sol-original,'fro')))
 
 
 def robust_select(
